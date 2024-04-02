@@ -4,8 +4,12 @@
 
 package com.avispl.symphony.dal.infrastructure.management.nureva.console;
 
+import java.util.Map;
+
+import org.junit.Assert;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import com.avispl.symphony.api.dal.dto.monitor.ExtendedStatistics;
 
@@ -35,5 +39,12 @@ public class NurevaConsoleCommunicatorTest {
 	void destroy() throws Exception {
 		nurevaConsoleCommunicator.disconnect();
 		nurevaConsoleCommunicator.destroy();
+	}
+
+	@Test
+	void testGetAggregatorData() throws Exception {
+		extendedStatistic = (ExtendedStatistics) nurevaConsoleCommunicator.getMultipleStatistics().get(0);
+		Map<String, String> statistics = extendedStatistic.getStatistics();
+		Assert.assertEquals(2, statistics.size());
 	}
 }
