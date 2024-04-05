@@ -9,7 +9,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * DeviceDTO
+ * Represents a device with its properties.
  *
  * @author Harry / Symphony Dev Team<br>
  * Created on 3/25/2024
@@ -20,12 +20,22 @@ public class DeviceDTO {
 	private String id;
 	private String room;
 
-	public DeviceDTO(String organizationId,String id, String room) {
+	/**
+	 * Constructs a DeviceDTO object with the specified organization ID, ID, and room.
+	 *
+	 * @param organizationId The organization ID of the device.
+	 * @param id The ID of the device.
+	 * @param room The room associated with the device.
+	 */
+	public DeviceDTO(String organizationId, String id, String room) {
 		this.organizationId = organizationId;
 		this.id = id;
 		this.room = room;
 	}
 
+	/**
+	 * Default constructor.
+	 */
 	public DeviceDTO() {
 	}
 
@@ -84,9 +94,10 @@ public class DeviceDTO {
 	}
 
 	/**
+	 * Counts the number of distinct rooms among a list of devices.
 	 *
-	 * @param devices
-	 * @return
+	 * @param devices The list of DeviceDTO objects.
+	 * @return The number of distinct rooms.
 	 */
 	public static int countDistinctRooms(List<DeviceDTO> devices) {
 		Set<String> uniqueRooms = devices.stream().map(DeviceDTO::getRoom).collect(Collectors.toSet());

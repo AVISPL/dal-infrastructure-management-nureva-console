@@ -15,8 +15,10 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -26,9 +28,11 @@ import org.springframework.http.HttpMethod;
 import org.springframework.util.CollectionUtils;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import javax.security.auth.login.FailedLoginException;
 
 import com.avispl.symphony.api.dal.control.Controller;
+import com.avispl.symphony.api.dal.dto.control.AdvancedControllableProperty;
 import com.avispl.symphony.api.dal.dto.control.ControllableProperty;
 import com.avispl.symphony.api.dal.dto.monitor.ExtendedStatistics;
 import com.avispl.symphony.api.dal.dto.monitor.Statistics;
@@ -37,6 +41,8 @@ import com.avispl.symphony.api.dal.error.ResourceNotReachableException;
 import com.avispl.symphony.api.dal.monitor.Monitorable;
 import com.avispl.symphony.api.dal.monitor.aggregator.Aggregator;
 import com.avispl.symphony.dal.communicator.RestCommunicator;
+import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.AggregatedProperty;
+import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.AggregatedTypeEnum;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.NurevaConsoleCommand;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.NurevaConsoleConstant;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.PingMode;
@@ -141,6 +147,13 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	private volatile long validRetrieveStatisticsTimestamp;
 
 	/**
+	 * Aggregator inactivity timeout. If the {@link NurevaConsoleCommunicator#retrieveMultipleStatistics()}  method is not
+	 * called during this period of time - device is considered to be paused, thus the Cloud API
+	 * is not supposed to be called
+	 */
+	private static final long retrieveStatisticsTimeOut = 3 * 60 * 1000;
+
+	/**
 	 * Update the status of the device.
 	 * The device is considered as paused if did not receive any retrieveMultipleStatistics()
 	 * calls during {@link NurevaConsoleCommunicator}
@@ -148,6 +161,21 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	private synchronized void updateAggregatorStatus() {
 		devicePaused = validRetrieveStatisticsTimestamp < System.currentTimeMillis();
 	}
+
+	/**
+	 * Uptime time stamp to valid one
+	 */
+	private synchronized void updateValidRetrieveStatisticsTimestamp() {
+		validRetrieveStatisticsTimestamp = System.currentTimeMillis() + retrieveStatisticsTimeOut;
+		updateAggregatorStatus();
+	}
+
+	/**
+	 * A mapper for reading and writing JSON using Jackson library.
+	 * ObjectMapper provides functionality for converting between Java objects and JSON.
+	 * It can be used to serialize objects to JSON format, and deserialize JSON data to objects.
+	 */
+	ObjectMapper objectMapper = new ObjectMapper();
 
 	/**
 	 * Executor that runs all the async operations, that is posting and
@@ -171,10 +199,34 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 */
 	private ExtendedStatistics localExtendedStatistics;
 
+	/**
+	 * List of aggregated device
+	 */
+	private List<AggregatedDevice> aggregatedDeviceList = Collections.synchronizedList(new ArrayList<>());
+
+	/**
+	 * Cached data
+	 */
+	private Map<String, Map<String, String>> cachedMonitoringDevice = Collections.synchronizedMap(new HashMap<>());
+
+	/**
+	 * list of organizations
+	 */
 	private List<String> organizations = Collections.synchronizedList(new ArrayList<>());
 
+	/**
+	 * map of the latest firmware version by type
+	 */
+	private Map<String, String> latestFirmwareMapping = Collections.synchronizedMap(new HashMap<>());
+
+	/**
+	 * list of all devices
+	 */
 	private List<DeviceDTO> deviceList = Collections.synchronizedList(new ArrayList<>());
 
+	/**
+	 * token for header
+	 */
 	private String token;
 
 	/**
@@ -192,6 +244,19 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 */
 	private String numberThreads;
 
+	/**
+	 * start index
+	 */
+	private int startIndex = NurevaConsoleConstant.START_INDEX;
+
+	/**
+	 * end index
+	 */
+	private int endIndex = NurevaConsoleConstant.NUMBER_DEVICE_IN_INTERVAL;
+
+	/**
+	 * ping mode
+	 */
 	private PingMode pingMode = PingMode.ICMP;
 
 	/**
@@ -305,6 +370,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 			ExtendedStatistics extendedStatistics = new ExtendedStatistics();
 			retrieveOrganizations();
 			retrieveSystemInfo();
+			retrieveLatestFirmwareVersion();
 			populateSystemInfo(statistics);
 			extendedStatistics.setStatistics(statistics);
 			localExtendedStatistics = extendedStatistics;
@@ -319,7 +385,51 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 */
 	@Override
 	public void controlProperty(ControllableProperty controllableProperty) throws Exception {
+		reentrantLock.lock();
+		try {
+			String property = controllableProperty.getProperty();
+			String deviceId = controllableProperty.getDeviceId();
+			String value = String.valueOf(controllableProperty.getValue());
 
+			String[] propertyList = property.split(NurevaConsoleConstant.HASH);
+			String propertyName = property;
+			if (property.contains(NurevaConsoleConstant.HASH)) {
+				propertyName = propertyList[1];
+			}
+			Optional<AggregatedDevice> aggregatedDevice = aggregatedDeviceList.stream().filter(item -> item.getDeviceId().equals(deviceId)).findFirst();
+			if (aggregatedDevice.isPresent()) {
+				AggregatedProperty item = AggregatedProperty.getByDefaultName(propertyName);
+				if (item == null) {
+					throw new IllegalArgumentException("Error when control. Can't find property name.");
+				}
+				String attributes = item.getValue();
+				switch (item) {
+					case SPEAKER_TREBLE_LEVEL:
+					case SPEAKER_BASS_LEVEL:
+						value = String.valueOf((int) Float.parseFloat(value));
+						sendControlCommand(deviceId, propertyName, attributes, Integer.parseInt(value));
+						updateCachedValue(deviceId, propertyName, value);
+						break;
+					case ACTIVE_ZONE_CONTROL:
+						String status = NurevaConsoleConstant.NUMBER_ONE.equalsIgnoreCase(value) ? NurevaConsoleConstant.TRUE : NurevaConsoleConstant.FALSE;
+						sendControlCommand(deviceId, propertyName, attributes, Boolean.parseBoolean(status));
+						updateCachedValue(deviceId, propertyName, status);
+						break;
+					case ACTIVE_ZONE_TYPE:
+						status = NurevaConsoleConstant.NUMBER_ONE.equalsIgnoreCase(value) ? "\"Full\"" : "\"Partial\"";
+						sendControlCommand(deviceId, propertyName, attributes, status);
+						updateCachedValue(deviceId, propertyName, status);
+						break;
+					default:
+						if (logger.isWarnEnabled()) {
+							logger.warn(String.format("Unable to execute %s command on device %s: Not Supported", property, deviceId));
+						}
+						break;
+				}
+			}
+		} finally {
+			reentrantLock.unlock();
+		}
 	}
 
 	/**
@@ -344,7 +454,19 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 */
 	@Override
 	public List<AggregatedDevice> retrieveMultipleStatistics() throws Exception {
-		return null;
+		if (!checkValidApiToken()) {
+			throw new FailedLoginException("Please enter valid password and username field.");
+		}
+		if (executorService == null) {
+			executorService = Executors.newFixedThreadPool(1);
+			executorService.submit(deviceDataLoader = new NurevaConsoleDataLoader());
+		}
+		nextDevicesCollectionIterationTimestamp = System.currentTimeMillis();
+		updateValidRetrieveStatisticsTimestamp();
+		if (cachedMonitoringDevice.isEmpty()) {
+			return Collections.emptyList();
+		}
+		return cloneAndPopulateAggregatedDeviceList();
 	}
 
 	/**
@@ -407,6 +529,10 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 			localExtendedStatistics.getControllableProperties().clear();
 		}
 		nextDevicesCollectionIterationTimestamp = 0;
+		aggregatedDeviceList.clear();
+		cachedMonitoringDevice.clear();
+		latestFirmwareMapping.clear();
+		organizations.clear();
 		super.internalDestroy();
 	}
 
@@ -500,6 +626,28 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	}
 
 	/**
+	 * Retrieves the latest firmware version for each aggregated type from the Nureva console.
+	 * This method iterates over all aggregated types and sends a request to retrieve the latest firmware version
+	 * for each type. If a valid response containing the firmware version is received, it is stored in the
+	 * latestFirmwareMapping map.
+	 * If an error occurs during the retrieval process, it is logged with the corresponding request information.
+	 */
+	private void retrieveLatestFirmwareVersion() {
+		String request = NurevaConsoleConstant.EMPTY;
+		for (AggregatedTypeEnum item : AggregatedTypeEnum.values()) {
+			try {
+				request = String.format(NurevaConsoleCommand.GET_LATEST_FIRMWARE_VERSION, item.getName());
+				JsonNode response = this.doGet(request, JsonNode.class);
+				if (response != null && response.has("version")) {
+					latestFirmwareMapping.put(item.getName(), response.get("version").asText());
+				}
+			} catch (Exception e) {
+				logger.error("Error when retrieve request " + request);
+			}
+		}
+	}
+
+	/**
 	 * Sends a command to retrieve information about all devices associated with a specific organization starting from a given index.
 	 *
 	 * @param orgId The ID of the organization to retrieve device information for.
@@ -534,6 +682,418 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 * Any error during the process is logged.
 	 */
 	private void populateDeviceDetails() {
+		int numberOfThreads = getDefaultNumberOfThread();
+		ExecutorService executorServiceForRetrieveAggregatedData = Executors.newFixedThreadPool(numberOfThreads);
+		List<Future<?>> futures = new ArrayList<>();
 
+		if (endIndex > deviceList.size()) {
+			endIndex = deviceList.size();
+		}
+		synchronized (deviceList) {
+			for (int i = startIndex; i < endIndex; i++) {
+				int index = i;
+				Future<?> future = executorServiceForRetrieveAggregatedData.submit(() -> processDeviceId(deviceList.get(index).getOrganizationId(), deviceList.get(index).getId()));
+				futures.add(future);
+			}
+		}
+		waitForFutures(futures, executorServiceForRetrieveAggregatedData);
+		executorServiceForRetrieveAggregatedData.shutdown();
+		if (endIndex == deviceList.size()) {
+			startIndex = NurevaConsoleConstant.START_INDEX;
+			endIndex = NurevaConsoleConstant.NUMBER_DEVICE_IN_INTERVAL;
+		} else {
+			startIndex = endIndex;
+			endIndex += NurevaConsoleConstant.NUMBER_DEVICE_IN_INTERVAL;
+		}
+	}
+
+	/**
+	 * Clones and populates a new list of aggregated devices with mapped monitoring properties.
+	 *
+	 * @return A new list of {@link AggregatedDevice} objects with mapped monitoring properties.
+	 */
+	private List<AggregatedDevice> cloneAndPopulateAggregatedDeviceList() {
+		synchronized (aggregatedDeviceList) {
+			aggregatedDeviceList.clear();
+			cachedMonitoringDevice.forEach((key, value) -> {
+				AggregatedDevice aggregatedDevice = new AggregatedDevice();
+				Map<String, String> cachedData = cachedMonitoringDevice.get(key);
+				String deviceName = cachedData.get(AggregatedProperty.DEVICE_NAME.getPropertyName());
+				String deviceStatus = cachedData.get(AggregatedProperty.DEVICE_STATUS.getPropertyName());
+				aggregatedDevice.setDeviceId(key);
+				aggregatedDevice.setDeviceOnline(false);
+				if (deviceStatus != null) {
+					aggregatedDevice.setDeviceOnline("Online".equals(deviceStatus));
+				}
+				if (deviceName != null) {
+					aggregatedDevice.setDeviceName(deviceName.toUpperCase());
+				}
+				Map<String, String> stats = new HashMap<>();
+				List<AdvancedControllableProperty> advancedControllableProperties = new ArrayList<>();
+				populateMonitorProperties(key, cachedData, stats, advancedControllableProperties);
+				aggregatedDevice.setProperties(stats);
+				aggregatedDevice.setControllableProperties(advancedControllableProperties);
+				aggregatedDeviceList.add(aggregatedDevice);
+			});
+		}
+		return aggregatedDeviceList;
+	}
+
+	/**
+	 * Waits for the completion of all futures in the provided list and then shuts down the executor service.
+	 *
+	 * @param futures The list of Future objects representing asynchronous tasks.
+	 * @param executorService The ExecutorService to be shut down.
+	 */
+	private void waitForFutures(List<Future<?>> futures, ExecutorService executorService) {
+		for (Future<?> future : futures) {
+			try {
+				future.get();
+			} catch (Exception e) {
+				logger.error("An exception occurred while waiting for a future to complete.", e);
+			}
+		}
+		executorService.shutdown();
+	}
+
+	/**
+	 * Processes device information for a specific organization and device ID.
+	 * This method retrieves device information and settings for the given device ID.
+	 *
+	 * @param orgId The ID of the organization associated with the device.
+	 * @param deviceId The ID of the device to process.
+	 */
+	private void processDeviceId(String orgId, String deviceId) {
+		retrieveDeviceInfo(deviceId);
+		retrieveDeviceSettings(orgId, deviceId);
+	}
+
+	/**
+	 * Retrieves information about a device with the specified device ID.
+	 *
+	 * @param deviceId The ID of the device to retrieve information for.
+	 */
+	private void retrieveDeviceInfo(String deviceId) {
+		try {
+			JsonNode response = this.doGet(String.format(NurevaConsoleCommand.DEVICE_INFO_COMMAND, deviceId), JsonNode.class);
+			if (response != null) {
+				Map<String, String> mappingValue = new HashMap<>();
+				List<AggregatedProperty> deviceInfoList = AggregatedProperty.getListByType(NurevaConsoleConstant.INFORMATION);
+				for (AggregatedProperty item : deviceInfoList) {
+					String value = NurevaConsoleConstant.EMPTY;
+					JsonNode itemValueNode = response.get(item.getValue());
+					if (itemValueNode != null) {
+						if (itemValueNode.isArray()) {
+							value = itemValueNode.toString();
+						} else {
+							value = itemValueNode.asText();
+						}
+					}
+					mappingValue.put(item.getPropertyName(), value);
+				}
+				putMapIntoCachedData(deviceId, mappingValue);
+			}
+		} catch (Exception e) {
+			logger.error(String.format("Error when retrieve device info by id %s", deviceId), e);
+		}
+	}
+
+	/**
+	 * Retrieves settings information for a device associated with a specific organization and device ID.
+	 *
+	 * @param orgId The ID of the organization associated with the device.
+	 * @param deviceId The ID of the device to retrieve settings for.
+	 */
+	private void retrieveDeviceSettings(String orgId, String deviceId) {
+		try {
+			JsonNode response = this.doGet(String.format(NurevaConsoleCommand.LATEST_SETTINGS_INFO_COMMAND, orgId, deviceId), JsonNode.class);
+			if (response != null) {
+				Map<String, String> mappingValue = new HashMap<>();
+				List<AggregatedProperty> deviceInfoList = AggregatedProperty.getListByType(NurevaConsoleConstant.SETTINGS);
+				for (AggregatedProperty item : deviceInfoList) {
+					String value = NurevaConsoleConstant.EMPTY;
+					if (response.has(item.getValue())) {
+						value = response.get(item.getValue()).asText();
+					}
+					mappingValue.put(item.getPropertyName(), value);
+				}
+				putMapIntoCachedData(deviceId, mappingValue);
+			}
+		} catch (Exception e) {
+			logger.error(String.format("Error when retrieve device info by id %s", deviceId), e);
+		}
+	}
+
+	/**
+	 * Populates monitor properties based on the cached data, statistics map, and list of advanced controllable properties.
+	 *
+	 * @param cached The cached data map.
+	 * @param stats The statistics map to populate.
+	 * @param advancedControllableProperties The list of advanced controllable properties.
+	 */
+	private void populateMonitorProperties(String key, Map<String, String> cached, Map<String, String> stats, List<AdvancedControllableProperty> advancedControllableProperties) {
+		for (AggregatedProperty item : AggregatedProperty.values()) {
+			String propertyName = item.getPropertyName();
+			if (NurevaConsoleConstant.SETTINGS.equalsIgnoreCase(item.getGroup())) {
+				propertyName = item.getGroup() + NurevaConsoleConstant.HASH + item.getPropertyName();
+			}
+			String value = getDefaultValueForNullData(cached.get(item.getPropertyName()));
+			if (NurevaConsoleConstant.NONE.equalsIgnoreCase(value) && !item.equals(AggregatedProperty.ROOM_NAME)) {
+				continue;
+			}
+			switch (item) {
+				case ROOM_NAME:
+					Optional<String> roomNameOptional = deviceList.stream().filter(device -> device.getId().equals(key))
+							.map(DeviceDTO::getRoom).findFirst();
+					stats.put(propertyName, roomNameOptional.orElse(NurevaConsoleConstant.NONE));
+					break;
+				case DEVICE_NAME:
+					break;
+				case FIRMWARE_VERSION:
+					stats.put(propertyName, value);
+					String deviceType = AggregatedTypeEnum.getType(cached.get(AggregatedProperty.DEVICE_NAME.getPropertyName()));
+					if (!NurevaConsoleConstant.NONE.equalsIgnoreCase(deviceType)) {
+						String latestFirmware = getDefaultValueForNullData(latestFirmwareMapping.get(deviceType));
+						if (!NurevaConsoleConstant.NONE.equalsIgnoreCase(latestFirmware)) {
+							String availableFirmware = "False";
+							if (!value.equalsIgnoreCase(latestFirmware)) {
+								availableFirmware = "True";
+								stats.put("FirmwareUpdateVersion", latestFirmware);
+							}
+							stats.put("FirmwareUpdateAvailable", availableFirmware);
+						}
+					}
+					break;
+				case SPEAKER_TREBLE_LEVEL:
+				case SPEAKER_BASS_LEVEL:
+					addAdvancedControlProperties(advancedControllableProperties, stats,
+							createSlider(stats, propertyName, "0", "100", 0f, 100f, Float.parseFloat(value)), value);
+					stats.put(propertyName + NurevaConsoleConstant.CURRENT_VALUE, value);
+					break;
+				case ACTIVE_ZONE_CONTROL:
+					int status = NurevaConsoleConstant.TRUE.equalsIgnoreCase(value) ? 1 : 0;
+					addAdvancedControlProperties(advancedControllableProperties, stats, createSwitch(propertyName, status, NurevaConsoleConstant.OFF, NurevaConsoleConstant.ON), String.valueOf(status));
+					break;
+				case ACTIVE_ZONE_TYPE:
+					if (NurevaConsoleConstant.TRUE.equalsIgnoreCase(cached.get("ActiveZoneControl"))) {
+						status = NurevaConsoleConstant.FULL.equalsIgnoreCase(value) ? 1 : 0;
+						addAdvancedControlProperties(advancedControllableProperties, stats, createSwitch(propertyName, status, NurevaConsoleConstant.PARTIAL, NurevaConsoleConstant.FULL), String.valueOf(status));
+					} else {
+						stats.put(propertyName, value);
+					}
+					break;
+				case HARDWARE_COMPONENTS:
+					try {
+						JsonNode hardwareComponents = objectMapper.readTree(value);
+						if (hardwareComponents.isArray()) {
+							int index = 0;
+							for (JsonNode node : hardwareComponents) {
+								index++;
+								String group = "HardwareComponent" + index + NurevaConsoleConstant.HASH;
+								if (node.has(NurevaConsoleConstant.MODEL)) {
+									stats.put(group + "Model", getDefaultValueForNullData(node.get(NurevaConsoleConstant.MODEL).asText()));
+								}
+								if (node.has(NurevaConsoleConstant.PHYSICAL_ID)) {
+									stats.put(group + "PhysicalId", getDefaultValueForNullData(node.get(NurevaConsoleConstant.PHYSICAL_ID).asText()));
+								}
+								if (node.has(NurevaConsoleConstant.PORT_NUMBER)) {
+									stats.put(group + "PortNumber", getDefaultValueForNullData(node.get(NurevaConsoleConstant.PORT_NUMBER).asText()));
+								}
+							}
+						}
+					} catch (Exception e) {
+						logger.error("Error while populate Hardware Components", e);
+					}
+					break;
+				default:
+					if (NurevaConsoleConstant.TRUE.equalsIgnoreCase(value)) {
+						value = "Enable";
+					} else if (NurevaConsoleConstant.FALSE.equalsIgnoreCase(value)) {
+						value = "Disable";
+					}
+					stats.put(propertyName, uppercaseFirstCharacter(value));
+			}
+		}
+	}
+
+	/**
+	 * Puts the provided mapping values into the cached monitoring data for the specified device ID.
+	 *
+	 * @param deviceId The ID of the device.
+	 * @param mappingValue The mapping values to be added.
+	 */
+	private void putMapIntoCachedData(String deviceId, Map<String, String> mappingValue) {
+		synchronized (cachedMonitoringDevice) {
+			Map<String, String> map = new HashMap<>();
+			if (cachedMonitoringDevice.get(deviceId) != null) {
+				map = cachedMonitoringDevice.get(deviceId);
+			}
+			map.putAll(mappingValue);
+			cachedMonitoringDevice.put(deviceId, map);
+		}
+	}
+
+	/**
+	 * Sends a control command to a specific device with the given attributes and value.
+	 *
+	 * @param deviceId The ID of the device to send the control command to.
+	 * @param name The name of the control command.
+	 * @param attributes The attributes of the control command.
+	 * @param value The value of the control command.
+	 * @throws IllegalArgumentException If there is an issue while creating or retrieving the control command,
+	 * or if the response indicates failure.
+	 */
+	private void sendControlCommand(String deviceId, String name, String attributes, Object value) {
+		String body = "{\n"
+				+ "  \"type\": \"SetControlSettings\",\n"
+				+ "  \"version\": 1,\n"
+				+ "  \"payload\": {\n"
+				+ "    \"attributes\": {\n"
+				+ "      \"%s\": %s\n"
+				+ "    }\n"
+				+ "  },\n"
+				+ "  \"deviceIds\": [\n"
+				+ "    \"%s\"\n"
+				+ "  ]\n"
+				+ "}";
+		try {
+			String bodyRequest = String.format(body, attributes, value, deviceId);
+			JsonNode commandResponse = this.doPost(NurevaConsoleCommand.CREATE_CONTROL_COMMAND, bodyRequest, JsonNode.class);
+			if (commandResponse != null && commandResponse.has(NurevaConsoleConstant.ID)) {
+				String commandId = commandResponse.get(NurevaConsoleConstant.ID).asText();
+				JsonNode commandStatus = this.doGet(String.format(NurevaConsoleCommand.GET_STATUS_CONTROL_COMMAND, commandId), JsonNode.class);
+				if (commandStatus != null && commandStatus.has(NurevaConsoleConstant.DEVICES)) {
+					JsonNode deviceNode = commandStatus.get(NurevaConsoleConstant.DEVICES).get(0);
+					if (!deviceNode.has(NurevaConsoleConstant.HAS_FAILED) || NurevaConsoleConstant.TRUE.equalsIgnoreCase(deviceNode.get(NurevaConsoleConstant.HAS_FAILED).asText())) {
+						throw new IllegalArgumentException("The response returns failure");
+					}
+				} else {
+					throw new IllegalArgumentException("Cannot get status for the control command.");
+				}
+			} else {
+				throw new IllegalArgumentException("Cannot create control command.");
+			}
+		} catch (Exception e) {
+			throw new IllegalArgumentException(String.format("Can't control %s with value is %s. %s", name, value, e.getMessage()));
+		}
+	}
+
+	/**
+	 * Updates the cached value for a specific device with the given name and value.
+	 *
+	 * @param deviceId The identifier of the device.
+	 * @param name The name associated with the value.
+	 * @param value The new value to be updated.
+	 */
+	private void updateCachedValue(String deviceId, String name, String value) {
+		cachedMonitoringDevice.computeIfPresent(deviceId, (key, map) -> {
+			map.put(name, value);
+			return map;
+		});
+	}
+
+	/**
+	 * Gets the default number of threads based on the provided input or a default constant value.
+	 *
+	 * @return The default number of threads.
+	 */
+	private int getDefaultNumberOfThread() {
+		int result;
+		try {
+			if (StringUtils.isNotNullOrEmpty(numberThreads)) {
+				result = Integer.parseInt(numberThreads);
+			} else {
+				result = NurevaConsoleConstant.DEFAULT_NUMBER_THREAD;
+			}
+		} catch (Exception e) {
+			result = NurevaConsoleConstant.DEFAULT_NUMBER_THREAD;
+		}
+		return result;
+	}
+
+	/**
+	 * capitalize the first character of the string
+	 *
+	 * @param input input string
+	 * @return string after fix
+	 */
+	private String uppercaseFirstCharacter(String input) {
+		char firstChar = input.charAt(0);
+		return Character.toUpperCase(firstChar) + input.substring(1);
+	}
+
+	/**
+	 * check value is null or empty
+	 *
+	 * @param value input value
+	 * @return value after checking
+	 */
+	private String getDefaultValueForNullData(String value) {
+		return StringUtils.isNotNullOrEmpty(value) && !NurevaConsoleConstant.NULL.equalsIgnoreCase(value) ? value : NurevaConsoleConstant.NONE;
+	}
+
+	/**
+	 * Add addAdvancedControlProperties if advancedControllableProperties different empty
+	 *
+	 * @param advancedControllableProperties advancedControllableProperties is the list that store all controllable properties
+	 * @param stats store all statistics
+	 * @param property the property is item advancedControllableProperties
+	 * @throws IllegalStateException when exception occur
+	 */
+	private void addAdvancedControlProperties(List<AdvancedControllableProperty> advancedControllableProperties, Map<String, String> stats, AdvancedControllableProperty property, String value) {
+		if (property != null) {
+			for (AdvancedControllableProperty controllableProperty : advancedControllableProperties) {
+				if (controllableProperty.getName().equals(property.getName())) {
+					advancedControllableProperties.remove(controllableProperty);
+					break;
+				}
+			}
+			if (StringUtils.isNotNullOrEmpty(value)) {
+				stats.put(property.getName(), value);
+			} else {
+				stats.put(property.getName(), NurevaConsoleConstant.EMPTY);
+			}
+			advancedControllableProperties.add(property);
+		}
+	}
+
+	/***
+	 * Create AdvancedControllableProperty slider instance
+	 *
+	 * @param stats extended statistics
+	 * @param name name of the control
+	 * @param initialValue initial value of the control
+	 * @return AdvancedControllableProperty slider instance
+	 */
+	private AdvancedControllableProperty createSlider(Map<String, String> stats, String name, String labelStart, String labelEnd, Float rangeStart, Float rangeEnd, Float initialValue) {
+		stats.put(name, initialValue.toString());
+		AdvancedControllableProperty.Slider slider = new AdvancedControllableProperty.Slider();
+		slider.setLabelStart(labelStart);
+		slider.setLabelEnd(labelEnd);
+		slider.setRangeStart(rangeStart);
+		slider.setRangeEnd(rangeEnd);
+
+		return new AdvancedControllableProperty(name, new Date(), slider, initialValue);
+	}
+
+	/**
+	 * Create switch is control property for metric
+	 *
+	 * @param name the name of property
+	 * @param status initial status (0|1)
+	 * @return AdvancedControllableProperty switch instance
+	 */
+	private AdvancedControllableProperty createSwitch(String name, int status, String labelOff, String labelOn) {
+		AdvancedControllableProperty.Switch toggle = new AdvancedControllableProperty.Switch();
+		toggle.setLabelOff(labelOff);
+		toggle.setLabelOn(labelOn);
+
+		AdvancedControllableProperty advancedControllableProperty = new AdvancedControllableProperty();
+		advancedControllableProperty.setName(name);
+		advancedControllableProperty.setValue(status);
+		advancedControllableProperty.setType(toggle);
+		advancedControllableProperty.setTimestamp(new Date());
+
+		return advancedControllableProperty;
 	}
 }

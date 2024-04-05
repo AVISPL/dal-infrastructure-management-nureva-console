@@ -22,7 +22,7 @@ public class NurevaConsoleConstant {
 	public static final String SETTINGS = "Settings";
 	public static final int DEFAULT_NUMBER_THREAD = 8;
 	public static final int START_INDEX = 0;
-	public static final int NUMBER_DEVICE_IN_INTERVAL = 200;
+	public static final int NUMBER_DEVICE_IN_INTERVAL = 120;
 	public static final int DEFAULT_COUNT_PARAM = 100;
 	public static final String CURRENT_VALUE = "CurrentValue";
 	public static final String ACCESS_TOKEN = "access_token";
