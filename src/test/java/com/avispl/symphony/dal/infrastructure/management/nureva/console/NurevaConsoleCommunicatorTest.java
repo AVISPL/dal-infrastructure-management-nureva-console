@@ -67,6 +67,20 @@ public class NurevaConsoleCommunicatorTest {
 	}
 
 	/**
+	 * Test case to verify the warnings of room.
+	 */
+	@Test
+	void testWarningsOfRoom() throws Exception {
+		nurevaConsoleCommunicator.getMultipleStatistics();
+		nurevaConsoleCommunicator.retrieveMultipleStatistics();
+		Thread.sleep(30000);
+		nurevaConsoleCommunicator.retrieveMultipleStatistics();
+		extendedStatistic = (ExtendedStatistics) nurevaConsoleCommunicator.getMultipleStatistics().get(0);
+		Map<String, String> statistics = extendedStatistic.getStatistics();
+		Assert.assertEquals(3, statistics.size());
+	}
+
+	/**
 	 * Test case to verify the retrieval of multiple statistics.
 	 */
 	@Test

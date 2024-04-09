@@ -49,7 +49,59 @@ import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.P
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.dto.DeviceDTO;
 import com.avispl.symphony.dal.util.StringUtils;
 
-
+/**
+ * NurevaConsoleCommunicator
+ * Supported features are:
+ * Monitoring Aggregator Device:
+ *  <ul>
+ *  <li> - FirmwareWarnings</li>
+ *  <li> - NumberOfConsoleRooms</li>
+ *  <li> - NumberOfDevices</li>
+ *  <ul>
+ *
+ * General Info Aggregated Device:
+ * <ul>
+ * <li> - ConsoleRoomName</li>
+ * <li> - deviceId</li>
+ * <li> - deviceName</li>
+ * <li> - deviceOnline</li>
+ * <li> - DeviceStatus</li>
+ * <li> - FirmwareCurrentVersion</li>
+ * <li> - FirmwareUpdateAvailable</li>
+ * <li> - FirmwareUpdateVersion</li>
+ * <li> - MachineName</li>
+ * </ul>
+ *
+ * Hardware Component Group:
+ * <ul>
+ * <li> - Model</li>
+ * <li> - PhysicalId(ppm)</li>
+ * <li> - PortNumber</li>
+ * </ul>
+ *
+ * Settings Group:
+ * <ul>
+ * <li> - ActiveZoneControl</li>
+ * <li> - ActiveZoneLength(ft)</li>
+ * <li> - ActiveZoneType</li>
+ * <li> - ActiveZoneWidth(ft)</li>
+ * <li> - AuxiliaryOutputState</li>
+ * <li> - MicrophoneGain</li>
+ * <li> - MicrophonePickupState</li>
+ * <li> - ReductionEchoLevel</li>
+ * <li> - ReductionNoiseLevel</li>
+ * <li> - SleepMode</li>
+ * <li> - SpeakerBassLevel</li>
+ * <li> - SpeakerTrebleLevel</li>
+ * <li> - VoiceAmplification</li>
+ * <li> - VoiceAmplificationAuxInLevel</li>
+ * <li> - VoiceAmplificationLevel</li>
+ * </ul>
+ *
+ * @author Harry / Symphony Dev Team<br>
+ * Created on 04/05/2024
+ * @since 1.0.0
+ */
 public class NurevaConsoleCommunicator extends RestCommunicator implements Aggregator, Monitorable, Controller {
 	/**
 	 * Process that is running constantly and triggers collecting data from Nureva Console SE API endpoints, based on the given timeouts and thresholds.
@@ -223,6 +275,11 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 * list of all devices
 	 */
 	private List<DeviceDTO> deviceList = Collections.synchronizedList(new ArrayList<>());
+
+	/**
+	 * count firmware warnings
+	 */
+	private Integer firmwareWarnings;
 
 	/**
 	 * token for header
@@ -533,6 +590,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 		cachedMonitoringDevice.clear();
 		latestFirmwareMapping.clear();
 		organizations.clear();
+		firmwareWarnings = null;
 		super.internalDestroy();
 	}
 
@@ -673,7 +731,10 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 */
 	private void populateSystemInfo(Map<String, String> stats) {
 		stats.put("NumberOfDevices", String.valueOf(deviceList.size()));
-		stats.put("NumberOfRooms", String.valueOf(DeviceDTO.countDistinctRooms(deviceList)));
+		stats.put("NumberOfConsoleRooms", String.valueOf(DeviceDTO.countDistinctRooms(deviceList)));
+		if (firmwareWarnings != null) {
+			stats.put("FirmwareWarnings", String.valueOf(firmwareWarnings));
+		}
 	}
 
 	/**
@@ -715,6 +776,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	private List<AggregatedDevice> cloneAndPopulateAggregatedDeviceList() {
 		synchronized (aggregatedDeviceList) {
 			aggregatedDeviceList.clear();
+			firmwareWarnings = 0;
 			cachedMonitoringDevice.forEach((key, value) -> {
 				AggregatedDevice aggregatedDevice = new AggregatedDevice();
 				Map<String, String> cachedData = cachedMonitoringDevice.get(key);
@@ -855,10 +917,11 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 					if (!NurevaConsoleConstant.NONE.equalsIgnoreCase(deviceType)) {
 						String latestFirmware = getDefaultValueForNullData(latestFirmwareMapping.get(deviceType));
 						if (!NurevaConsoleConstant.NONE.equalsIgnoreCase(latestFirmware)) {
-							String availableFirmware = "False";
+							String availableFirmware = NurevaConsoleConstant.FALSE;
 							if (!value.equalsIgnoreCase(latestFirmware)) {
-								availableFirmware = "True";
+								availableFirmware = NurevaConsoleConstant.TRUE;
 								stats.put("FirmwareUpdateVersion", latestFirmware);
+								firmwareWarnings ++;
 							}
 							stats.put("FirmwareUpdateAvailable", availableFirmware);
 						}

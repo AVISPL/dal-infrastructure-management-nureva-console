@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
  * @since 1.0.0
  */
 public enum AggregatedProperty {
-	ROOM_NAME("RoomName", "", ""),
+	ROOM_NAME("ConsoleRoomName", "", ""),
 	DEVICE_NAME("DeviceName", NurevaConsoleConstant.INFORMATION, "type"),
 	FIRMWARE_VERSION("FirmwareCurrentVersion", NurevaConsoleConstant.INFORMATION, "firmwareVersion"),
 	MACHINE_NAME("MachineName", NurevaConsoleConstant.INFORMATION, "machineName"),
