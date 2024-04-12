@@ -24,7 +24,7 @@ public enum AggregatedProperty {
 	DEVICE_STATUS("DeviceStatus", NurevaConsoleConstant.INFORMATION, "deviceStatus"),
 	HARDWARE_COMPONENTS("HardwareComponents", NurevaConsoleConstant.INFORMATION, "hardwareComponents"),
 	VOICE_AMPLIFICATION("VoiceAmplification", NurevaConsoleConstant.SETTINGS, "voiceAmplificationEnabled"),
-	AUX_IN_LEVEL("VoiceAmplificationAuxInLevel", NurevaConsoleConstant.SETTINGS, "voiceAmplificationAuxInLevel"),
+	AUX_IN_LEVEL("VoiceAmplificationAuxIn", NurevaConsoleConstant.SETTINGS, "voiceAmplificationAuxInLevel"),
 	VOICE_AMPLIFICATION_LEVEL("VoiceAmplificationLevel", NurevaConsoleConstant.SETTINGS, "voiceAmplificationLevel"),
 	ACTIVE_ZONE_TYPE("ActiveZoneType", NurevaConsoleConstant.SETTINGS, "activeZoneType"),
 	ACTIVE_ZONE_CONTROL("ActiveZoneControl", NurevaConsoleConstant.SETTINGS, "activeZoneControlEnabled"),

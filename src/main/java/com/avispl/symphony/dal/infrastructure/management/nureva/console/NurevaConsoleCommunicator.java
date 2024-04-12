@@ -921,11 +921,17 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 							if (!value.equalsIgnoreCase(latestFirmware)) {
 								availableFirmware = NurevaConsoleConstant.TRUE;
 								stats.put("FirmwareUpdateVersion", latestFirmware);
-								firmwareWarnings ++;
+								firmwareWarnings++;
 							}
 							stats.put("FirmwareUpdateAvailable", availableFirmware);
 						}
 					}
+					break;
+				case AUX_IN_LEVEL:
+					if ("Mic".equalsIgnoreCase(value) || "Line".equalsIgnoreCase(value)) {
+						value = value.concat(" Level");
+					}
+					stats.put(propertyName, value);
 					break;
 				case SPEAKER_TREBLE_LEVEL:
 				case SPEAKER_BASS_LEVEL:
