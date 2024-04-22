@@ -157,7 +157,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 					break loop;
 				}
 				if (flag) {
-					nextDevicesCollectionIterationTimestamp = System.currentTimeMillis() + 30000;
+					nextDevicesCollectionIterationTimestamp = System.currentTimeMillis() + 60000;
 					flag = false;
 				}
 
