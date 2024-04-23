@@ -299,7 +299,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	/**
 	 * number of threads
 	 */
-	private String numberThreads;
+	private Integer numberThreads;
 
 	/**
 	 * start index
@@ -339,7 +339,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 *
 	 * @return value of {@link #numberThreads}
 	 */
-	public String getNumberThreads() {
+	public Integer getNumberThreads() {
 		return numberThreads;
 	}
 
@@ -348,7 +348,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 *
 	 * @param numberThreads new value of {@link #numberThreads}
 	 */
-	public void setNumberThreads(String numberThreads) {
+	public void setNumberThreads(Integer numberThreads) {
 		this.numberThreads = numberThreads;
 	}
 
@@ -1069,10 +1069,10 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	private int getDefaultNumberOfThread() {
 		int result;
 		try {
-			if (StringUtils.isNotNullOrEmpty(numberThreads)) {
-				result = Integer.parseInt(numberThreads);
-			} else {
+			if (numberThreads == null || numberThreads <= 0 || numberThreads >= NurevaConsoleConstant.DEFAULT_NUMBER_THREAD) {
 				result = NurevaConsoleConstant.DEFAULT_NUMBER_THREAD;
+			} else {
+				result = numberThreads;
 			}
 		} catch (Exception e) {
 			result = NurevaConsoleConstant.DEFAULT_NUMBER_THREAD;
@@ -1111,17 +1111,11 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 */
 	private void addAdvancedControlProperties(List<AdvancedControllableProperty> advancedControllableProperties, Map<String, String> stats, AdvancedControllableProperty property, String value) {
 		if (property != null) {
-			for (AdvancedControllableProperty controllableProperty : advancedControllableProperties) {
-				if (controllableProperty.getName().equals(property.getName())) {
-					advancedControllableProperties.remove(controllableProperty);
-					break;
-				}
-			}
-			if (StringUtils.isNotNullOrEmpty(value)) {
-				stats.put(property.getName(), value);
-			} else {
-				stats.put(property.getName(), NurevaConsoleConstant.EMPTY);
-			}
+			advancedControllableProperties.removeIf(controllableProperty -> controllableProperty.getName().equals(property.getName()));
+
+			String propertyValue = StringUtils.isNotNullOrEmpty(value) ? value : NurevaConsoleConstant.EMPTY;
+			stats.put(property.getName(), propertyValue);
+
 			advancedControllableProperties.add(property);
 		}
 	}
