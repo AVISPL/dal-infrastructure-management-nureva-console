@@ -43,7 +43,7 @@ public enum AggregatedTypeEnum {
 	 * @return The aggregated type if found, otherwise {@link NurevaConsoleConstant#NONE}.
 	 */
 	public static String getType(String name) {
-		Optional<AggregatedTypeEnum> property = Arrays.stream(AggregatedTypeEnum.values()).filter(item -> name.toLowerCase().contains(item.getName().toLowerCase())).findFirst();
+		Optional<AggregatedTypeEnum> property = Arrays.stream(values()).filter(item -> name.toLowerCase().contains(item.getName().toLowerCase())).findFirst();
 		if (property.isPresent()) {
 			return property.get().getName();
 		}
