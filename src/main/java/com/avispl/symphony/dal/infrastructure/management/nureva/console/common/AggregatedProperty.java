@@ -7,7 +7,6 @@ package com.avispl.symphony.dal.infrastructure.management.nureva.console.common;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /**
  * Enum representing aggregated properties.
@@ -93,8 +92,7 @@ public enum AggregatedProperty {
 	 * @return A list of aggregated properties with the specified type.
 	 */
 	public static List<AggregatedProperty> getListByType(String type) {
-		return Arrays.stream(AggregatedProperty.values()).filter(item -> item.getGroup().equals(type))
-				.collect(Collectors.toList());
+		return Arrays.stream(values()).filter(item -> item.getGroup().equals(type)).toList();
 	}
 
 	/**
@@ -104,7 +102,7 @@ public enum AggregatedProperty {
 	 * @return The aggregated property with the specified default name, or null if not found.
 	 */
 	public static AggregatedProperty getByDefaultName(String name) {
-		Optional<AggregatedProperty> property = Arrays.stream(AggregatedProperty.values()).filter(item -> item.getPropertyName().equalsIgnoreCase(name)).findFirst();
+		Optional<AggregatedProperty> property = Arrays.stream(values()).filter(item -> item.getPropertyName().equalsIgnoreCase(name)).findFirst();
 		return property.orElse(null);
 	}
 }

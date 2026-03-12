@@ -5,10 +5,6 @@
 package com.avispl.symphony.dal.infrastructure.management.nureva.console;
 
 import java.io.IOException;
-import java.net.ConnectException;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
-import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
@@ -16,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -43,9 +40,9 @@ import com.avispl.symphony.api.dal.monitor.aggregator.Aggregator;
 import com.avispl.symphony.dal.communicator.RestCommunicator;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.AggregatedProperty;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.AggregatedTypeEnum;
+import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.AggregatorProperty;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.NurevaConsoleCommand;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.NurevaConsoleConstant;
-import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.PingMode;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.dto.DeviceDTO;
 import com.avispl.symphony.dal.util.StringUtils;
 
@@ -124,7 +121,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 				try {
 					TimeUnit.MILLISECONDS.sleep(500);
 				} catch (InterruptedException e) {
-					// Ignore for now
+					logger.info(String.format("Sleep for 0.5 second was interrupted with error message: %s", e.getMessage()));
 				}
 
 				if (!inProgress) {
@@ -139,8 +136,8 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 				if (logger.isDebugEnabled()) {
 					logger.debug("Fetching other than aggregated device list");
 				}
-				long currentTimestamp = System.currentTimeMillis();
-				if (!flag && nextDevicesCollectionIterationTimestamp <= currentTimestamp) {
+				long startCycle = System.currentTimeMillis();
+				if (!flag && nextDevicesCollectionIterationTimestamp <= startCycle) {
 					populateDeviceDetails();
 					flag = true;
 				}
@@ -149,7 +146,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 					try {
 						TimeUnit.MILLISECONDS.sleep(1000);
 					} catch (InterruptedException e) {
-						//
+						logger.info(String.format("Sleep for 1 second was interrupted with error message: %s", e.getMessage()));
 					}
 				}
 
@@ -157,7 +154,13 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 					break loop;
 				}
 				if (flag) {
-					nextDevicesCollectionIterationTimestamp = System.currentTimeMillis() + 60000;
+					try {
+						nextDevicesCollectionIterationTimestamp = System.currentTimeMillis() + (getMonitoringRate() * 60000L);
+					} catch (NoSuchMethodError error) {
+						nextDevicesCollectionIterationTimestamp = System.currentTimeMillis() + 60000L;
+						logger.error("Unsupported feature: getMonitoringRate isn't available on current Cloud Connector version.", error);
+					}
+					lastMonitoringCycleDuration = Math.max((System.currentTimeMillis() - startCycle) / 1000, 1L);
 					flag = false;
 				}
 
@@ -246,6 +249,14 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 */
 	private final ReentrantLock reentrantLock = new ReentrantLock();
 
+	/** Application configuration loaded from {@code version.properties}. */
+	private final Properties versionProperties = new Properties();
+
+	/** Device adapter instantiation timestamp. */
+	private long adapterInitializationTimestamp = System.currentTimeMillis();
+
+	private Long lastMonitoringCycleDuration = 1L;
+
 	/**
 	 * Private variable representing the local extended statistics.
 	 */
@@ -312,29 +323,6 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	private int endIndex = NurevaConsoleConstant.NUMBER_DEVICE_IN_INTERVAL;
 
 	/**
-	 * ping mode
-	 */
-	private PingMode pingMode = PingMode.ICMP;
-
-	/**
-	 * Retrieves {@link #pingMode}
-	 *
-	 * @return value of {@link #pingMode}
-	 */
-	public String getPingMode() {
-		return pingMode.name();
-	}
-
-	/**
-	 * Sets {@link #pingMode} value
-	 *
-	 * @param pingMode new value of {@link #pingMode}
-	 */
-	public void setPingMode(String pingMode) {
-		this.pingMode = PingMode.ofString(pingMode);
-	}
-
-	/**
 	 * Retrieves {@link #numberThreads}
 	 *
 	 * @return value of {@link #numberThreads}
@@ -363,58 +351,6 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 
 	/**
 	 * {@inheritDoc}
-	 * <p>
-	 *
-	 * Check for available devices before retrieving the value
-	 * ping latency information to Symphony
-	 */
-	@Override
-	public int ping() throws Exception {
-		if (this.pingMode == PingMode.ICMP) {
-			return super.ping();
-		} else if (this.pingMode == PingMode.TCP) {
-			if (isInitialized()) {
-				long pingResultTotal = 0L;
-
-				for (int i = 0; i < this.getPingAttempts(); i++) {
-					long startTime = System.currentTimeMillis();
-
-					try (Socket puSocketConnection = new Socket(this.host, this.getPort())) {
-						puSocketConnection.setSoTimeout(this.getPingTimeout());
-						if (puSocketConnection.isConnected()) {
-							long pingResult = System.currentTimeMillis() - startTime;
-							pingResultTotal += pingResult;
-							if (this.logger.isTraceEnabled()) {
-								this.logger.trace(String.format("PING OK: Attempt #%s to connect to %s on port %s succeeded in %s ms", i + 1, host, this.getPort(), pingResult));
-							}
-						} else {
-							if (this.logger.isDebugEnabled()) {
-								this.logger.debug(String.format("PING DISCONNECTED: Connection to %s did not succeed within the timeout period of %sms", host, this.getPingTimeout()));
-							}
-							return this.getPingTimeout();
-						}
-					} catch (SocketTimeoutException | ConnectException tex) {
-						throw new RuntimeException("Socket connection timed out", tex);
-					} catch (UnknownHostException ex) {
-						throw new UnknownHostException(String.format("Connection timed out, UNKNOWN host %s", host));
-					} catch (Exception e) {
-						if (this.logger.isWarnEnabled()) {
-							this.logger.warn(String.format("PING TIMEOUT: Connection to %s did not succeed, UNKNOWN ERROR %s: ", host, e.getMessage()));
-						}
-						return this.getPingTimeout();
-					}
-				}
-				return Math.max(1, Math.toIntExact(pingResultTotal / this.getPingAttempts()));
-			} else {
-				throw new IllegalStateException("Cannot use device class without calling init() first");
-			}
-		} else {
-			throw new IllegalArgumentException("Unknown PING Mode: " + pingMode);
-		}
-	}
-
-	/**
-	 * {@inheritDoc}
 	 */
 	@Override
 	public List<Statistics> getMultipleStatistics() throws Exception {
@@ -424,12 +360,15 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 				throw new FailedLoginException("API Token cannot be null or empty, please enter valid password and username field.");
 			}
 			Map<String, String> statistics = new HashMap<>();
+			Map<String, String> dynamicStatistics = new HashMap<>();
 			ExtendedStatistics extendedStatistics = new ExtendedStatistics();
 			retrieveOrganizations();
 			retrieveSystemInfo();
 			retrieveLatestFirmwareVersion();
+			populateAdapterMetadata(statistics, dynamicStatistics);
 			populateSystemInfo(statistics);
 			extendedStatistics.setStatistics(statistics);
+			extendedStatistics.setDynamicStatistics(dynamicStatistics);
 			localExtendedStatistics = extendedStatistics;
 		} finally {
 			reentrantLock.unlock();
@@ -560,6 +499,11 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 		if (logger.isDebugEnabled()) {
 			logger.debug("Internal init is called.");
 		}
+		try {
+			this.versionProperties.load(this.getClass().getResourceAsStream("/version.properties"));
+		} catch (IOException e) {
+			this.logger.error("Failed to load version properties file.", e);
+		}
 		executorService = Executors.newFixedThreadPool(1);
 		executorService.submit(deviceDataLoader = new NurevaConsoleDataLoader());
 		super.internalInit();
@@ -591,6 +535,7 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 		latestFirmwareMapping.clear();
 		organizations.clear();
 		firmwareWarnings = null;
+		this.versionProperties.clear();
 		super.internalDestroy();
 	}
 
@@ -724,13 +669,29 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 		return null;
 	}
 
+	private void populateAdapterMetadata(Map<String, String> stats, Map<String, String> dynamicStats) {
+		long adapterUptime = System.currentTimeMillis() - adapterInitializationTimestamp;
+
+		stats.put(AggregatorProperty.ADAPTER_BUILD_DATE.getDefaultName(), this.versionProperties.getProperty("adapter.build.date"));
+		stats.put(AggregatorProperty.ADAPTER_UPTIME.getDefaultName(), this.normalizeUptime(adapterUptime / 1000));
+		stats.put(AggregatorProperty.ADAPTER_UPTIME_MIN.getDefaultName(), String.valueOf(adapterUptime / (1000 * 60)));
+		stats.put(AggregatorProperty.ADAPTER_VERSION.getDefaultName(), this.versionProperties.getProperty("adapter.version"));
+		try {
+			stats.put(AggregatorProperty.MONITORED_CYCLE_INTERVAL.getDefaultName(), String.valueOf(this.getMonitoringRate()));
+		} catch (NoSuchMethodError error) {
+			logger.warn("Unsupported feature: getMonitoringRate isn't available on current Cloud Connector version.", error);
+			stats.put(AggregatorProperty.MONITORED_CYCLE_INTERVAL.getDefaultName(), "N/A");
+		}
+		dynamicStats.put(AggregatorProperty.LAST_MONITORING_CYCLE_DURATION.getDefaultName(), String.valueOf(this.lastMonitoringCycleDuration));
+		dynamicStats.put(AggregatorProperty.MONITORED_DEVICES_TOTAL.getDefaultName(), String.valueOf(this.aggregatedDeviceList.size()));
+	}
+
 	/**
 	 * Populates statistics about the system using the information stored in the 'deviceList'.
 	 *
 	 * @param stats A map to populate with system statistics.
 	 */
 	private void populateSystemInfo(Map<String, String> stats) {
-		stats.put("NumberOfDevices", String.valueOf(deviceList.size()));
 		stats.put("NumberOfConsoleRooms", String.valueOf(DeviceDTO.countDistinctRooms(deviceList)));
 		if (firmwareWarnings != null) {
 			stats.put("FirmwareWarnings", String.valueOf(firmwareWarnings));
@@ -1099,6 +1060,37 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 */
 	private String getDefaultValueForNullData(String value) {
 		return StringUtils.isNotNullOrEmpty(value) && !NurevaConsoleConstant.NULL.equalsIgnoreCase(value) ? value : NurevaConsoleConstant.NONE;
+	}
+
+	/**
+	 * Uptime is received in seconds, need to normalize it and make it human-readable, like 1 d 5 hr 12 min 55 sec.
+	 * Incoming parameter is may have a decimal point, so in order to safely process this - it's rounded first.
+	 * We don't need to add a segment of time if it's 0.
+	 *
+	 * @param uptimeSeconds value in seconds
+	 * @return string value of format 'x d x hr x min x sec'
+	 */
+	private String normalizeUptime(long uptimeSeconds) {
+		StringBuilder normalizedUptime = new StringBuilder();
+
+		long seconds = uptimeSeconds % 60;
+		long minutes = uptimeSeconds % 3600 / 60;
+		long hours = uptimeSeconds % 86400 / 3600;
+		long days = uptimeSeconds / 86400;
+
+		if (days > 0) {
+			normalizedUptime.append(days).append(" d ");
+		}
+		if (hours > 0) {
+			normalizedUptime.append(hours).append(" hr ");
+		}
+		if (minutes > 0) {
+			normalizedUptime.append(minutes).append(" min ");
+		}
+		if (seconds > 0 || normalizedUptime.isEmpty()) {
+			normalizedUptime.append(seconds).append(" sec");
+		}
+		return normalizedUptime.toString().trim();
 	}
 
 	/**
