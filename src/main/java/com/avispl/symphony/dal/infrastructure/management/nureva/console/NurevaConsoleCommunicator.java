@@ -43,7 +43,6 @@ import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.A
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.AggregatorProperty;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.NurevaConsoleCommand;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.NurevaConsoleConstant;
-import com.avispl.symphony.dal.infrastructure.management.nureva.console.common.PingMode;
 import com.avispl.symphony.dal.infrastructure.management.nureva.console.dto.DeviceDTO;
 import com.avispl.symphony.dal.util.StringUtils;
 
@@ -322,29 +321,6 @@ public class NurevaConsoleCommunicator extends RestCommunicator implements Aggre
 	 * end index
 	 */
 	private int endIndex = NurevaConsoleConstant.NUMBER_DEVICE_IN_INTERVAL;
-
-	/**
-	 * ping mode
-	 */
-	private PingMode pingMode = PingMode.ICMP;
-
-	/**
-	 * Retrieves {@link #pingMode}
-	 *
-	 * @return value of {@link #pingMode}
-	 */
-	public String getPingMode() {
-		return pingMode.name();
-	}
-
-	/**
-	 * Sets {@link #pingMode} value
-	 *
-	 * @param pingMode new value of {@link #pingMode}
-	 */
-	public void setPingMode(String pingMode) {
-		this.pingMode = PingMode.ofString(pingMode);
-	}
 
 	/**
 	 * Retrieves {@link #numberThreads}
